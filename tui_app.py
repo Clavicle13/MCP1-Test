@@ -78,12 +78,23 @@ def create_context_panel(cluster_context: dict[str, Any]) -> Panel:
 def format_entity_table(query_type: str, raw_content: str) -> Table | None:
     """Parses JSON tool response content and formats entities into a styled Rich Table."""
     try:
-        data = json.loads(raw_content) if isinstance(raw_content, str) else raw_content
+        data_str = str(raw_content)
+        # Extract embedded JSON text if raw_content is formatted as ToolMessage representation
+        if "text': '" in data_str:
+            try:
+                data_str = data_str.split("text': '")[1].rsplit("'}", 1)[0]
+                data_str = data_str.replace("\\n", "\n").replace('\\"', '"')
+            except Exception:
+                pass
+
+        data = json.loads(data_str) if isinstance(data_str, str) and data_str.strip().startswith("{") else raw_content
         if not isinstance(data, dict):
             return None
 
-        # Extract items array from V4 API envelope
-        items = data.get("data") if "data" in data else data
+        # Unwrap Nutanix MCP payload wrapper (payload -> data)
+        payload = data.get("payload") if "payload" in data and isinstance(data["payload"], dict) else data
+        items = payload.get("data") if isinstance(payload, dict) and "data" in payload else payload
+
         if not isinstance(items, list):
             if isinstance(items, dict):
                 items = [items]
