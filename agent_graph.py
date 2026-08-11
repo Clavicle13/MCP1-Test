@@ -283,7 +283,7 @@ async def reviewer_node(state: NutanixAgentState) -> dict[str, Any]:
     review_msg = AIMessage(content=f"[REVIEWER CRITIQUE]: {critique}")
 
     # Explicitly increment current_step in state update dictionary if step succeeded
-    next_step = current_step + 1 if not step_failed and (current_step + 1) < len(plan) else current_step
+    next_step = current_step + 1 if not step_failed else current_step
 
     return {
         "critique": critique,
@@ -370,9 +370,12 @@ def route_after_reviewer(state: NutanixAgentState) -> Literal["executor", "plann
     plan = state.get("plan", [])
     current_step = state.get("current_step", 0)
 
-    if current_step < len(plan) and current_step > 0:
+    # If there are remaining steps in the plan, proceed to executor
+    if current_step < len(plan):
         return "executor"
 
+    # All plan steps completed! End graph turn cleanly.
+    logger.info("All plan steps completed. Ending graph turn.")
     return END
 
 
