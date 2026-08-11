@@ -254,11 +254,11 @@ async def run_tui_app():
 
         query = ""
         if user_choice == "1":
-            query = "List and inspect Nutanix Virtual Machines"
+            query = "List all Nutanix Virtual Machines using vmm_execute ahv_listVms"
         elif user_choice == "2":
-            query = "List and inspect Nutanix Storage Containers"
+            query = "List all Nutanix Storage Containers using storage_execute listStorageContainers"
         elif user_choice == "3":
-            query = "List and inspect Nutanix Network Subnets"
+            query = "List all Nutanix Network Subnets using networking_execute listSubnets"
         elif user_choice == "4":
             query = Prompt.ask("Enter custom natural language query").strip()
         else:

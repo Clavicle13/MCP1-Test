@@ -103,11 +103,17 @@ async def executor_node(state: NutanixAgentState) -> dict[str, Any]:
     active_step_desc = plan[current_step] if current_step < len(plan) else "Execute requested Nutanix operation"
 
     system_prompt = (
-        "You are the Nutanix MCP Executor Agent.\n"
+        "You are the Nutanix MCP Executor Agent managing Nutanix Prism Central resources.\n"
         f"CURRENT PLAN STEP [{current_step + 1}/{len(plan)}]: {active_step_desc}\n"
         f"REVIEWER CRITIQUE: {critique}\n"
         f"CLUSTER CONTEXT: {json.dumps(cluster_context, indent=2)}\n\n"
-        "Select and invoke the appropriate Nutanix MCP tool to execute this step."
+        "STRICT EXECUTION DIRECTIVES:\n"
+        "1. To retrieve or list entity records (VMs, Storage Containers, Subnets, Clusters), directly invoke the primary namespace execution tool:\n"
+        "   - For Virtual Machines: Use 'vmm_execute' with operation 'ahv_listVms' or 'esxi_listVms'.\n"
+        "   - For Storage Containers: Use 'storage_execute' or 'clustermgmt_execute' with operation 'listStorageContainers'.\n"
+        "   - For Network Subnets: Use 'networking_execute' with operation 'listSubnets'.\n"
+        "2. Do NOT call schema discovery tools ('getOperationSchema', 'listOperations') when asked to list or inspect actual entities.\n"
+        "3. Always select and invoke the exact tool call required to fetch live Prism Central entity data."
     )
 
     # Gemini requires message lists to end with user role (HumanMessage)
