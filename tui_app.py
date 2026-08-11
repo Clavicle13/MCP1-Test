@@ -141,20 +141,20 @@ def format_entity_table(query_type: str, raw_content: Any) -> Table | None:
             return table
 
         query_lower = query_type.lower()
-        if "vm" in query_lower or "virtual" in query_lower:
-            table = Table(title="[bold green]Discovered Nutanix Virtual Machines[/bold green]", box=box.ROUNDED)
+        if "vm" in query_lower or "virtual" in query_lower or "ahv" in query_lower or "vmm" in query_lower or "esxi" in query_lower:
+            table = Table(title=f"[bold green]Discovered Nutanix Virtual Machines ({len(items)} found)[/bold green]", box=box.ROUNDED)
             table.add_column("VM Name", style="bold white")
             table.add_column("ExtID (UUID)", style="cyan")
             table.add_column("Power State / Status", style="yellow")
             for vm in items[:12]:
-                name = vm.get("name", "N/A")
-                ext_id = vm.get("extId", "N/A")
+                name = vm.get("name", vm.get("vmName", "N/A"))
+                ext_id = vm.get("extId", vm.get("id", "N/A"))
                 power = vm.get("powerState", vm.get("status", "UNKNOWN"))
                 table.add_row(str(name), str(ext_id), str(power))
             return table
 
         elif "storage" in query_lower or "container" in query_lower:
-            table = Table(title="[bold green]Discovered Storage Containers[/bold green]", box=box.ROUNDED)
+            table = Table(title=f"[bold green]Discovered Storage Containers ({len(items)} found)[/bold green]", box=box.ROUNDED)
             table.add_column("Container Name", style="bold white")
             table.add_column("ExtID (UUID)", style="cyan")
             table.add_column("Container Type", style="yellow")
@@ -166,7 +166,7 @@ def format_entity_table(query_type: str, raw_content: Any) -> Table | None:
             return table
 
         elif "subnet" in query_lower or "network" in query_lower:
-            table = Table(title="[bold green]Discovered Network Subnets[/bold green]", box=box.ROUNDED)
+            table = Table(title=f"[bold green]Discovered Network Subnets ({len(items)} found)[/bold green]", box=box.ROUNDED)
             table.add_column("Subnet Name", style="bold white")
             table.add_column("ExtID (UUID)", style="cyan")
             table.add_column("Type / VLAN", style="yellow")
@@ -176,6 +176,20 @@ def format_entity_table(query_type: str, raw_content: Any) -> Table | None:
                 vlan = sub.get("vlanId", sub.get("subnetType", "N/A"))
                 table.add_row(str(name), str(ext_id), str(vlan))
             return table
+
+        # Fallback for any other entity array
+        table = Table(title=f"[bold green]Discovered Nutanix Entities ({len(items)} found)[/bold green]", box=box.ROUNDED)
+        table.add_column("Index", style="dim white")
+        table.add_column("Entity Name / ExtID", style="bold white")
+        table.add_column("Details", style="cyan")
+        for idx, item in enumerate(items[:12]):
+            if isinstance(item, dict):
+                name = item.get("name", item.get("extId", item.get("id", f"Item #{idx+1}")))
+                detail = str({k: v for k, v in item.items() if k not in ("name", "$reserved", "$objectType")})[:60]
+                table.add_row(str(idx + 1), str(name), str(detail))
+            else:
+                table.add_row(str(idx + 1), str(item), "")
+        return table
 
     except Exception:
         pass

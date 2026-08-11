@@ -109,9 +109,9 @@ async def executor_node(state: NutanixAgentState) -> dict[str, Any]:
         f"CLUSTER CONTEXT: {json.dumps(cluster_context, indent=2)}\n\n"
         "STRICT EXECUTION DIRECTIVES:\n"
         "1. To retrieve or list entity records (VMs, Storage Containers, Subnets, Clusters), directly invoke the primary namespace execution tool:\n"
-        "   - For Virtual Machines: Use 'vmm_execute' with operation 'ahv_listVms' or 'esxi_listVms'.\n"
-        "   - For Storage Containers: Use 'storage_execute' or 'clustermgmt_execute' with operation 'listStorageContainers'.\n"
-        "   - For Network Subnets: Use 'networking_execute' with operation 'listSubnets'.\n"
+        "   - For Virtual Machines: ALWAYS use tool 'vmm_execute' with operation 'ahv_listVms' (do NOT use 'esxi_listVms' or 'listVms').\n"
+        "   - For Storage Containers: Use tool 'storage_execute' or 'clustermgmt_execute' with operation 'listStorageContainers'.\n"
+        "   - For Network Subnets: Use tool 'networking_execute' with operation 'listSubnets'.\n"
         "2. Do NOT call schema discovery tools ('getOperationSchema', 'listOperations') when asked to list or inspect actual entities.\n"
         "3. Always select and invoke the exact tool call required to fetch live Prism Central entity data."
     )

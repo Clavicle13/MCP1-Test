@@ -110,7 +110,29 @@ async def run_interactive_workflow():
 
                     elif "messages" in state_update:
                         last_m = state_update["messages"][-1]
-                        print(f" -> Output ({last_m.__class__.__name__}): {last_m.content[:300]}")
+                        if isinstance(last_m, ToolMessage):
+                            from tui_app import extract_json_object
+                            data = extract_json_object(last_m.content)
+                            if data and isinstance(data, dict):
+                                payload = data.get("payload") if "payload" in data and isinstance(data["payload"], dict) else data
+                                items = payload.get("data") if isinstance(payload, dict) and "data" in payload else payload
+                                if isinstance(items, list) and len(items) > 0:
+                                    print(f"\n   ✔ [Discovered Nutanix Entities ({len(items)} total)]:")
+                                    for idx, item in enumerate(items[:15], 1):
+                                        if isinstance(item, dict):
+                                            name = item.get("name", item.get("vmName", "N/A"))
+                                            ext_id = item.get("extId", item.get("id", "N/A"))
+                                            power = item.get("powerState", item.get("status", ""))
+                                            power_str = f" | Power: {power}" if power else ""
+                                            print(f"     {idx}. {name} (UUID: {ext_id}){power_str}")
+                                        else:
+                                            print(f"     {idx}. {item}")
+                                else:
+                                    print(f" -> Output (ToolMessage): 0 entities returned for operation.")
+                            else:
+                                print(f" -> Output ({last_m.__class__.__name__}): {last_m.content[:300]}")
+                        else:
+                            print(f" -> Output ({last_m.__class__.__name__}): {last_m.content[:300]}")
 
                     if "cluster_context" in state_update and state_update["cluster_context"]:
                         print(f" -> Updated Cluster Context: {json.dumps(state_update['cluster_context'])}")
