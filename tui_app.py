@@ -208,10 +208,11 @@ def create_execution_panel(logs: list[str], plan: list[str], current_step: int, 
         grid.add_row(active_table)
         grid.add_row(Text("─" * 60, style="dim black"))
 
-    # Execution logs output
+    # Execution logs output (adjust log count so table is never clipped by panel boundary)
+    log_count = 4 if active_table else 8
     log_text = Text()
     log_text.append("Live Execution & Diagnostic Output:\n", style="bold underline cyan")
-    for log_line in logs[-10:]:  # Keep recent lines
+    for log_line in logs[-log_count:]:  # Keep recent lines
         log_text.append(f"{log_line}\n")
 
     grid.add_row(log_text)
