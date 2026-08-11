@@ -1,2 +1,22 @@
+# Environment & secrets
 .env
+.env.local
+.env.*.local
+
+# Python cache & virtual environment
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
 venv/
+.venv/
+env/
+ENV/
+
+# IDE files
+.vscode/
+.idea/
+
+# MCP artifacts & logs
+ntnx-api-mcp-server/logs/
+ntnx-api-mcp-server/artifacts/
