@@ -75,19 +75,52 @@ def create_context_panel(cluster_context: dict[str, Any]) -> Panel:
     return Panel(ctx_table, title="[bold yellow]Cluster Context (Entity UUIDs)[/bold yellow]", style="yellow")
 
 
-def format_entity_table(query_type: str, raw_content: str) -> Table | None:
-    """Parses JSON tool response content and formats entities into a styled Rich Table."""
-    try:
-        data_str = str(raw_content)
-        # Extract embedded JSON text if raw_content is formatted as ToolMessage representation
-        if "text': '" in data_str:
+def extract_json_object(raw_content: Any) -> dict[str, Any] | None:
+    """Extracts JSON object dictionary from any raw ToolMessage content structure."""
+    if isinstance(raw_content, dict):
+        return raw_content
+
+    if isinstance(raw_content, list) and len(raw_content) > 0:
+        first_item = raw_content[0]
+        if isinstance(first_item, dict) and "text" in first_item:
             try:
-                data_str = data_str.split("text': '")[1].rsplit("'}", 1)[0]
-                data_str = data_str.replace("\\n", "\n").replace('\\"', '"')
+                return json.loads(first_item["text"])
             except Exception:
                 pass
+        return extract_json_object(first_item)
 
-        data = json.loads(data_str) if isinstance(data_str, str) and data_str.strip().startswith("{") else raw_content
+    raw_str = str(raw_content)
+
+    # Direct json load attempt
+    try:
+        parsed = json.loads(raw_str)
+        if isinstance(parsed, dict):
+            return parsed
+        if isinstance(parsed, list) and len(parsed) > 0:
+            return extract_json_object(parsed)
+    except Exception:
+        pass
+
+    # Substring bracket search fallback
+    first_brace = raw_str.find("{")
+    last_brace = raw_str.rfind("}")
+    if first_brace != -1 and last_brace > first_brace:
+        snippet = raw_str[first_brace:last_brace + 1]
+        snippet = snippet.replace("\\n", "\n").replace('\\"', '"')
+        try:
+            parsed = json.loads(snippet)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            pass
+
+    return None
+
+
+def format_entity_table(query_type: str, raw_content: Any) -> Table | None:
+    """Parses JSON tool response content and formats entities into a styled Rich Table."""
+    try:
+        data = extract_json_object(raw_content)
         if not isinstance(data, dict):
             return None
 
@@ -113,7 +146,7 @@ def format_entity_table(query_type: str, raw_content: str) -> Table | None:
             table.add_column("VM Name", style="bold white")
             table.add_column("ExtID (UUID)", style="cyan")
             table.add_column("Power State / Status", style="yellow")
-            for vm in items[:8]:
+            for vm in items[:12]:
                 name = vm.get("name", "N/A")
                 ext_id = vm.get("extId", "N/A")
                 power = vm.get("powerState", vm.get("status", "UNKNOWN"))
@@ -125,7 +158,7 @@ def format_entity_table(query_type: str, raw_content: str) -> Table | None:
             table.add_column("Container Name", style="bold white")
             table.add_column("ExtID (UUID)", style="cyan")
             table.add_column("Container Type", style="yellow")
-            for sc in items[:8]:
+            for sc in items[:12]:
                 name = sc.get("name", "N/A")
                 ext_id = sc.get("extId", "N/A")
                 c_type = sc.get("containerType", "Standard")
@@ -137,7 +170,7 @@ def format_entity_table(query_type: str, raw_content: str) -> Table | None:
             table.add_column("Subnet Name", style="bold white")
             table.add_column("ExtID (UUID)", style="cyan")
             table.add_column("Type / VLAN", style="yellow")
-            for sub in items[:8]:
+            for sub in items[:12]:
                 name = sub.get("name", "N/A")
                 ext_id = sub.get("extId", "N/A")
                 vlan = sub.get("vlanId", sub.get("subnetType", "N/A"))
@@ -341,8 +374,8 @@ async def run_tui_app():
                         last_m = state_update["messages"][-1]
                         raw_content = str(last_m.content)
 
-                        # Check if raw_content contains JSON tool payload to format into entity Table
-                        parsed_table = format_entity_table(query, raw_content)
+                        # Check if message content contains JSON tool payload to format into entity Table
+                        parsed_table = format_entity_table(query, last_m.content)
                         if parsed_table:
                             active_table = parsed_table
                             logs.append("[bold green]✔ Parsed returned Nutanix entities into structured view below.[/bold green]")
