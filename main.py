@@ -16,6 +16,75 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(na
 logger = logging.getLogger("NutanixMain")
 
 
+def _parse_tool_message_entities(content: Any) -> list | None:
+    """Robustly parses a ToolMessage content value into a list of entity dicts.
+
+    Handles all known content shapes produced by langchain_mcp_adapters:
+      - Python list: [{'type': 'text', 'text': '<JSON string>'}]
+      - Raw JSON string: '{"ok": true, "payload": {"data": [...]}}'
+      - Plain dict: {'ok': True, 'payload': {'data': [...]}}
+
+    Returns a list of entity dicts on success, or None if parsing fails.
+    """
+    try:
+        # Shape 1: Python list of content blocks (most common from MCP adapters)
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    text_val = block.get("text", "")
+                    try:
+                        data = json.loads(text_val)
+                        return _unwrap_nutanix_payload(data)
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+            return None
+
+        # Shape 2: Already a dict
+        if isinstance(content, dict):
+            return _unwrap_nutanix_payload(content)
+
+        # Shape 3: Raw string (JSON or str representation of a list)
+        if isinstance(content, str):
+            # Try direct JSON parse
+            try:
+                data = json.loads(content)
+                if isinstance(data, dict):
+                    return _unwrap_nutanix_payload(data)
+                if isinstance(data, list):
+                    # recurse to handle list-of-blocks
+                    return _parse_tool_message_entities(data)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+            # Fallback: find first { ... } substring
+            start = content.find("{")
+            end = content.rfind("}")
+            if start != -1 and end > start:
+                try:
+                    data = json.loads(content[start:end + 1])
+                    if isinstance(data, dict):
+                        return _unwrap_nutanix_payload(data)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+    except Exception:
+        pass
+    return None
+
+
+def _unwrap_nutanix_payload(data: dict) -> list | None:
+    """Unwraps Nutanix MCP API response envelope to extract the entity list."""
+    if not isinstance(data, dict):
+        return None
+    # Nutanix MCP wraps results: { "ok": true, "payload": { "data": [...] } }
+    payload = data.get("payload", data)
+    if isinstance(payload, dict):
+        items = payload.get("data")
+        if isinstance(items, list):
+            return items
+    return None
+
+
 async def run_interactive_workflow():
     """Main execution flow for Nutanix Prism Central MCP Reflective Agent workflow."""
     print("=" * 80)
@@ -111,26 +180,23 @@ async def run_interactive_workflow():
                     elif "messages" in state_update:
                         last_m = state_update["messages"][-1]
                         if isinstance(last_m, ToolMessage):
-                            from tui_app import extract_json_object
-                            data = extract_json_object(last_m.content)
-                            if data and isinstance(data, dict):
-                                payload = data.get("payload") if "payload" in data and isinstance(data["payload"], dict) else data
-                                items = payload.get("data") if isinstance(payload, dict) and "data" in payload else payload
-                                if isinstance(items, list) and len(items) > 0:
-                                    print(f"\n   ✔ [Discovered Nutanix Entities ({len(items)} total)]:")
-                                    for idx, item in enumerate(items[:15], 1):
+                            items = _parse_tool_message_entities(last_m.content)
+                            if items is not None:
+                                if len(items) > 0:
+                                    print()
+                                    print(f"   {'#':<5} {'Name':<30} {'UUID':<40} {'Power State':<12}")
+                                    print(f"   {'-'*5} {'-'*30} {'-'*40} {'-'*12}")
+                                    for idx, item in enumerate(items[:20], 1):
                                         if isinstance(item, dict):
                                             name = item.get("name", item.get("vmName", "N/A"))
                                             ext_id = item.get("extId", item.get("id", "N/A"))
                                             power = item.get("powerState", item.get("status", ""))
-                                            power_str = f" | Power: {power}" if power else ""
-                                            print(f"     {idx}. {name} (UUID: {ext_id}){power_str}")
-                                        else:
-                                            print(f"     {idx}. {item}")
+                                            print(f"   {str(idx):<5} {str(name):<30} {str(ext_id):<40} {str(power):<12}")
+                                    print(f"\n   ✔ Total: {len(items)} entities returned from Prism Central.")
                                 else:
-                                    print(f" -> Output (ToolMessage): 0 entities returned for operation.")
+                                    print(" -> Output (ToolMessage): 0 entities returned for operation.")
                             else:
-                                print(f" -> Output ({last_m.__class__.__name__}): {last_m.content[:300]}")
+                                print(f" -> Output (ToolMessage): {str(last_m.content)[:300]}")
                         else:
                             print(f" -> Output ({last_m.__class__.__name__}): {last_m.content[:300]}")
 
