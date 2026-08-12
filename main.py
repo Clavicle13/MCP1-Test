@@ -5,7 +5,7 @@ import logging
 import sys
 from typing import Any
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, ToolMessage
 from config import Config
 from state import NutanixAgentState
 from mcp_client import mcp_client_manager
