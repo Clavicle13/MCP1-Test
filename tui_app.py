@@ -11,13 +11,15 @@ logging.getLogger("google_genai").setLevel(logging.ERROR)
 logging.getLogger("httpx").setLevel(logging.ERROR)
 
 from rich import box
+from rich.align import Align
 from rich.console import Console
 from rich.layout import Layout
 from rich.panel import Panel
 from rich.prompt import Prompt
+from rich.rule import Rule
 from rich.table import Table
 from rich.text import Text
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, ToolMessage
 
 from config import Config
 from state import NutanixAgentState
@@ -25,6 +27,109 @@ from mcp_client import mcp_client_manager
 from agent_graph import build_reflective_nutanix_graph
 
 console = Console()
+
+
+def show_entity_popup(title: str, items: list[dict], columns: list[tuple[str, str, str]]) -> None:
+    """Displays a full-screen popup overlay with the entity table, then waits for Enter.
+
+    Args:
+        title:   Popup panel title (e.g. 'Virtual Machines').
+        items:   List of entity dicts returned from Prism Central.
+        columns: List of (display_name, dict_key, rich_style) tuples defining the table columns.
+    """
+    console.clear()
+
+    # ── Header banner ────────────────────────────────────────────────────────
+    console.print(Rule(f"[bold cyan]  Nutanix Prism Central  ─  {title}  [/bold cyan]", style="cyan"))
+    console.print()
+
+    # ── Build the entity table ────────────────────────────────────────────────
+    tbl = Table(
+        title=f"[bold green]{title}  ({len(items)} total)[/bold green]",
+        box=box.DOUBLE_EDGE,
+        border_style="cyan",
+        header_style="bold white on dark_blue",
+        expand=True,
+        show_lines=True,
+    )
+    tbl.add_column("#", style="dim white", width=4, justify="right")
+    for (col_name, _key, col_style) in columns:
+        tbl.add_column(col_name, style=col_style)
+
+    for idx, item in enumerate(items, 1):
+        row_values = [str(idx)]
+        for (_col_name, key, _style) in columns:
+            # Support dot-path lookup (e.g. "address.value") and fallback keys
+            keys = key.split("|")
+            val = "N/A"
+            for k in keys:
+                parts = k.strip().split(".")
+                v = item
+                for p in parts:
+                    if isinstance(v, dict):
+                        v = v.get(p)
+                    else:
+                        v = None
+                        break
+                if v is not None and str(v).strip():
+                    val = str(v)
+                    break
+            row_values.append(val)
+        tbl.add_row(*row_values)
+
+    # ── Wrap table in a full-width panel ─────────────────────────────────────
+    popup = Panel(
+        Align.center(tbl),
+        title=f"[bold white on blue]  ╔══  {title.upper()}  ══╗  [/bold white on blue]",
+        subtitle="[dim]Press [bold cyan]Enter[/bold cyan] to return to the dashboard[/dim]",
+        border_style="bright_cyan",
+        padding=(1, 2),
+        expand=True,
+    )
+    console.print(popup)
+    console.print()
+    input()
+
+
+def _build_popup_columns(query: str) -> tuple[str, list[tuple[str, str, str]]]:
+    """Returns (popup_title, columns) appropriate for the entity type inferred from the query."""
+    q = query.lower()
+    if "vm" in q or "virtual" in q or "ahv" in q:
+        return (
+            "Virtual Machines",
+            [
+                ("VM Name",     "name|vmName",       "bold white"),
+                ("UUID (ExtID)","extId|id",          "bright_cyan"),
+                ("Power State", "powerState|status", "bold green"),
+            ],
+        )
+    elif "storage" in q or "container" in q:
+        return (
+            "Storage Containers",
+            [
+                ("Container Name",  "name",          "bold white"),
+                ("UUID (ExtID)",    "extId|id",      "bright_cyan"),
+                ("Container Type",  "containerType", "yellow"),
+            ],
+        )
+    elif "subnet" in q or "network" in q:
+        return (
+            "Network Subnets",
+            [
+                ("Subnet Name",  "name",              "bold white"),
+                ("UUID (ExtID)", "extId|id",          "bright_cyan"),
+                ("VLAN / Type",  "vlanId|subnetType", "yellow"),
+            ],
+        )
+    else:
+        return (
+            "Nutanix Entities",
+            [
+                ("Name / ID", "name|extId|id",  "bold white"),
+                ("UUID",      "extId|id",        "bright_cyan"),
+                ("Details",   "status|type",     "yellow"),
+            ],
+        )
 
 
 def create_header() -> Panel:
@@ -389,27 +494,30 @@ async def run_tui_app():
                         last_m = state_update["messages"][-1]
                         raw_content = str(last_m.content)
 
-                        # Check if message content contains JSON tool payload to format into entity Table
-                        parsed_table = format_entity_table(query, last_m.content)
-                        if parsed_table:
-                            active_table = parsed_table
-                            logs.append("[bold green]✔ Parsed returned Nutanix entities into structured view below.[/bold green]")
-
-                        # Cleanly parse tool error output for TUI display
-                        if '"ok": false' in raw_content.lower() or "execution_error" in raw_content:
-                            logs.append(f"[bold red]Prism Central API Error:[/bold red] Operation failed or host {Config.PC_HOST} unreachable.")
-                            try:
-                                text_clean = raw_content
-                                if "text': '" in text_clean:
-                                    text_clean = text_clean.split("text': '")[1].split("'}")[0]
-                                text_clean = text_clean.replace("\\n", " ").replace('\"', '"')
-                                if "error" in text_clean:
-                                    logs.append(f"  [dim red]Detail: {text_clean[:180]}...[/dim red]")
-                            except Exception:
-                                pass
-                        elif not parsed_table:
-                            clean_str = raw_content.replace("\n", " ").strip()
-                            logs.append(f"Output: {clean_str[:120]}...")
+                        # For ToolMessage results: show popup overlay instead of embedding in workspace panel
+                        if isinstance(last_m, ToolMessage):
+                            from main import _parse_tool_message_entities
+                            entities = _parse_tool_message_entities(last_m.content)
+                            if entities:
+                                popup_title, popup_columns = _build_popup_columns(query)
+                                show_entity_popup(popup_title, entities, popup_columns)
+                                active_table = None  # Clear embedded table; popup handled display
+                                logs.append(f"[bold green]✔ Displayed {len(entities)} {popup_title} in popup view.[/bold green]")
+                            elif '"ok": false' in raw_content.lower() or "execution_error" in raw_content:
+                                logs.append(f"[bold red]Prism Central API Error:[/bold red] Operation failed or host {Config.PC_HOST} unreachable.")
+                            else:
+                                logs.append(f"Output: {raw_content[:120]}...")
+                        else:
+                            # Non-tool messages: render as before (plan text, critique text, etc.)
+                            parsed_table = format_entity_table(query, last_m.content)
+                            if parsed_table:
+                                active_table = parsed_table
+                                logs.append("[bold green]✔ Parsed returned Nutanix entities into structured view below.[/bold green]")
+                            elif '"ok": false' in raw_content.lower() or "execution_error" in raw_content:
+                                logs.append(f"[bold red]Prism Central API Error:[/bold red] Operation failed or host {Config.PC_HOST} unreachable.")
+                            else:
+                                clean_str = raw_content.replace("\n", " ").strip()
+                                logs.append(f"Output: {clean_str[:120]}...")
 
                     # Real-time screen redraw after each node event!
                     console.clear()
