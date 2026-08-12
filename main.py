@@ -12,7 +12,7 @@ from mcp_client import mcp_client_manager
 from agent_graph import build_reflective_nutanix_graph
 
 # Setup clean logging output
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("NutanixMain")
 
 
@@ -22,10 +22,15 @@ def _parse_tool_message_entities(content: Any) -> list | None:
     Handles all known content shapes produced by langchain_mcp_adapters:
       - Python list: [{'type': 'text', 'text': '<JSON string>'}]
       - Raw JSON string: '{"ok": true, "payload": {"data": [...]}}'
+      - Python repr of a list (str): "[{'type': 'text', 'text': '{...}'}]"
       - Plain dict: {'ok': True, 'payload': {'data': [...]}}
 
     Returns a list of entity dicts on success, or None if parsing fails.
     """
+    import ast
+
+    logger.debug(f"[parser] content type={type(content).__name__}, preview={str(content)[:120]}")
+
     try:
         # Shape 1: Python list of content blocks (most common from MCP adapters)
         if isinstance(content, list):
@@ -34,29 +39,38 @@ def _parse_tool_message_entities(content: Any) -> list | None:
                     text_val = block.get("text", "")
                     try:
                         data = json.loads(text_val)
-                        return _unwrap_nutanix_payload(data)
-                    except (json.JSONDecodeError, TypeError):
-                        pass
+                        result = _unwrap_nutanix_payload(data)
+                        logger.debug(f"[parser] Shape1 list→text→json.loads → {len(result) if result else 'None'} items")
+                        return result
+                    except (json.JSONDecodeError, TypeError) as e:
+                        logger.debug(f"[parser] Shape1 json.loads failed: {e}")
             return None
 
         # Shape 2: Already a dict
         if isinstance(content, dict):
             return _unwrap_nutanix_payload(content)
 
-        # Shape 3: Raw string (JSON or str representation of a list)
+        # Shape 3: String - may be JSON or Python repr of a list
         if isinstance(content, str):
-            # Try direct JSON parse
+            # 3a. Try direct JSON parse (handles clean JSON strings)
             try:
                 data = json.loads(content)
                 if isinstance(data, dict):
                     return _unwrap_nutanix_payload(data)
                 if isinstance(data, list):
-                    # recurse to handle list-of-blocks
                     return _parse_tool_message_entities(data)
             except (json.JSONDecodeError, TypeError):
                 pass
 
-            # Fallback: find first { ... } substring
+            # 3b. Try ast.literal_eval (handles Python repr: "[{'type': 'text', ...}]")
+            try:
+                data = ast.literal_eval(content)
+                if isinstance(data, (list, dict)):
+                    return _parse_tool_message_entities(data)
+            except (ValueError, SyntaxError):
+                pass
+
+            # 3c. Fallback: extract first {...} substring and parse as JSON
             start = content.find("{")
             end = content.rfind("}")
             if start != -1 and end > start:
@@ -67,8 +81,8 @@ def _parse_tool_message_entities(content: Any) -> list | None:
                 except (json.JSONDecodeError, TypeError):
                     pass
 
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"[parser] Unexpected error: {e}")
     return None
 
 
@@ -81,8 +95,10 @@ def _unwrap_nutanix_payload(data: dict) -> list | None:
     if isinstance(payload, dict):
         items = payload.get("data")
         if isinstance(items, list):
+            logger.debug(f"[parser] Unwrapped {len(items)} entities from payload")
             return items
     return None
+
 
 
 async def run_interactive_workflow():

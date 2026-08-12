@@ -31,10 +31,15 @@ async def planner_node(state: NutanixAgentState) -> dict[str, Any]:
 
     system_prompt = (
         "You are an expert Nutanix Prism Central Planner.\n"
-        "Analyze the user's objective and formulate a 2-4 step sequential execution plan using available Nutanix V4 API tools.\n"
+        "Analyze the user's objective and formulate a sequential execution plan using available Nutanix V4 API tools.\n"
         f"Active Cluster Context: {json.dumps(cluster_context)}\n\n"
+        "IMPORTANT RULES:\n"
+        "- For simple READ / LIST queries (e.g. 'list VMs', 'show storage containers', 'list subnets'), "
+        "produce a SINGLE-STEP plan that directly invokes the MCP tool (e.g. 'Use vmm_execute ahv_listVms to list all AHV Virtual Machines').\n"
+        "- Do NOT add display, extraction, or summary steps — the calling code handles presentation.\n"
+        "- Only use multiple steps for complex workflows requiring chained API calls (e.g. create VM then power on).\n"
         "Respond with a JSON object format:\n"
-        '{\n  "plan": ["1. Step one description", "2. Step two description"]\n}'
+        '{\n  "plan": ["1. Step one description"]\n}'
     )
 
     llm = get_llm()
@@ -53,20 +58,12 @@ async def planner_node(state: NutanixAgentState) -> dict[str, Any]:
             logger.warning(f"Planner LLM parsing fallback: {exc}")
 
     if not plan:
-        # Default reflective plan generation based on query keyword
+        # Default single-step plan generation based on query keyword
         query_lower = last_user_input.lower()
-        if "storage" in query_lower:
-            plan = [
-                "1. Discover storage namespace operations",
-                "2. List storage containers in Prism Central",
-                "3. Review container capacity and status"
-            ]
+        if "storage" in query_lower or "container" in query_lower:
+            plan = ["1. Use storage_execute listStorageContainers to list all Nutanix Storage Containers"]
         elif "subnet" in query_lower or "network" in query_lower:
-            plan = [
-                "1. Discover networking namespace operations",
-                "2. List subnets and network configurations",
-                "3. Review IP allocation and VLAN settings"
-            ]
+            plan = ["1. Use networking_execute listSubnets to list all Nutanix Network Subnets"]
         elif "create" in query_lower or "delete" in query_lower or "update" in query_lower:
             plan = [
                 "1. Inspect operation schema for requested mutation",
@@ -74,11 +71,7 @@ async def planner_node(state: NutanixAgentState) -> dict[str, Any]:
                 "3. Verify task completion and entity status"
             ]
         else:
-            plan = [
-                "1. List virtual machines in Prism Central",
-                "2. Inspect active VM specs and power states",
-                "3. Summarize cluster VM health"
-            ]
+            plan = ["1. Use vmm_execute ahv_listVms to list all AHV Virtual Machines"]
 
     plan_summary = "\n".join([f"  • {step}" for step in plan])
     plan_msg = AIMessage(content=f"Formulated Execution Plan:\n{plan_summary}")
