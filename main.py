@@ -12,8 +12,13 @@ from mcp_client import mcp_client_manager
 from agent_graph import build_reflective_nutanix_graph
 
 # Setup clean logging output
-logging.basicConfig(level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("NutanixMain")
+
+# Suppress noisy third-party debug loggers
+for _noisy in ("httpcore", "httpx", "urllib3", "langsmith", "asyncio", "google_genai", "langchain_google_genai"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
+
 
 
 def _parse_tool_message_entities(content: Any) -> list | None:
