@@ -35,15 +35,17 @@ def _parse_tool_message_entities(content: Any) -> list | None:
         # Shape 1: Python list of content blocks (most common from MCP adapters)
         if isinstance(content, list):
             for block in content:
-                if isinstance(block, dict) and block.get("type") == "text":
-                    text_val = block.get("text", "")
-                    try:
-                        data = json.loads(text_val)
-                        result = _unwrap_nutanix_payload(data)
-                        logger.debug(f"[parser] Shape1 list→text→json.loads → {len(result) if result else 'None'} items")
-                        return result
-                    except (json.JSONDecodeError, TypeError) as e:
-                        logger.debug(f"[parser] Shape1 json.loads failed: {e}")
+                if isinstance(block, dict):
+                    # Accept blocks with type="text" OR any block that has a "text" key
+                    text_val = block.get("text") if "text" in block else None
+                    if text_val is not None:
+                        try:
+                            data = json.loads(text_val)
+                            result = _unwrap_nutanix_payload(data)
+                            logger.debug(f"[parser] Shape1 list→text→json.loads → {len(result) if result else 'None'} items")
+                            return result
+                        except (json.JSONDecodeError, TypeError) as e:
+                            logger.debug(f"[parser] Shape1 json.loads failed: {e}")
             return None
 
         # Shape 2: Already a dict
