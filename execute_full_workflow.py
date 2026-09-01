@@ -97,6 +97,33 @@ def run_full_workflow():
         transit_vpc_names = ["Transit-VPC-01"]
         vlan_subnet_names = ["secondary-DM3-POC081"]
 
+        # Step 1.0.1: Detach VM NICs attached to Transit or Spoke subnets before deleting subnets
+        print("\n[1.0.1] Detaching VM NICs attached to Transit / Spoke subnets...")
+        target_subnet_ids = {s.get("extId") for s in r_subnets if s.get("name") in (spoke_subnet_names + transit_subnet_names)}
+        try:
+            r_all_vms = client.get(f"{base_url}/vmm/v4.2/ahv/config/vms", headers=get_headers()).json().get("data", [])
+            for vm in r_all_vms:
+                vm_id = vm.get("extId")
+                r_vm_nics = client.get(f"{base_url}/vmm/v4.2/ahv/config/vms/{vm_id}/nics", headers=get_headers()).json().get("data", [])
+                for nic in r_vm_nics:
+                    net_info = nic.get("networkInfo", {}) or nic.get("nicNetworkInfo", {})
+                    sub_ref = net_info.get("subnet", {}).get("extId")
+                    if sub_ref in target_subnet_ids:
+                        nic_id = nic.get("extId")
+                        print(f"Detaching NIC {nic_id} from VM '{vm.get('name')}' ({vm_id})...")
+                        r_vm_single = client.get(f"{base_url}/vmm/v4.2/ahv/config/vms/{vm_id}", headers=get_headers())
+                        v_etag = r_vm_single.headers.get("ETag") or r_vm_single.json().get("data", {}).get("$reserved", {}).get("ETag")
+                        del_nic_headers = get_headers()
+                        if v_etag:
+                            del_nic_headers["If-Match"] = v_etag
+                        res_del = client.delete(f"{base_url}/vmm/v4.2/ahv/config/vms/{vm_id}/nics/{nic_id}", headers=del_nic_headers)
+                        if res_del.status_code in (200, 202):
+                            t_id = res_del.json().get("data", {}).get("extId")
+                            if t_id:
+                                wait_for_task(client, t_id, f"Detach NIC from {vm.get('name')}")
+        except Exception as exc:
+            print(f"  [Warning] NIC detachment error: {exc}")
+
         # Step 1.1: Delete Spoke Subnets
         print("\n[1.1] Deleting Spoke Subnets...")
         for s in r_subnets:
@@ -358,6 +385,54 @@ def run_full_workflow():
         t_nonerp_task_id = res.json().get("data", {}).get("extId")
         wait_for_task(client, t_nonerp_task_id, "Create Transit-NonERP-01 Subnet")
 
+        # Discover newly created Transit-NonERP-01 Subnet ExtID
+        r_subnets_after_transit = client.get(f"{base_url}/networking/v4.3/config/subnets", headers=get_headers()).json().get("data", [])
+        transit_nonerp_subnet_obj = next((s for s in r_subnets_after_transit if s.get("name") == "Transit-NonERP-01"), None)
+        transit_nonerp_ext_id = transit_nonerp_subnet_obj.get("extId") if transit_nonerp_subnet_obj else None
+
+        # Step 2.3.1: Attach Linux Bastion VM to Transit-NonERP-01 Subnet
+        print(f"\n[2.3.1] Attaching Linux Bastion VM ('{Config.BASTION_VM_NAME}') to Transit-NonERP-01...")
+        r_vms = client.get(f"{base_url}/vmm/v4.2/ahv/config/vms", headers=get_headers()).json().get("data", [])
+        bastion_vm = next((vm for vm in r_vms if vm.get("name") == Config.BASTION_VM_NAME), None)
+        if not bastion_vm:
+            print(f"  [Warning] Bastion VM '{Config.BASTION_VM_NAME}' not found in cluster inventory.")
+        elif not transit_nonerp_ext_id:
+            print("  [Warning] Transit-NonERP-01 subnet ExtID not found.")
+        else:
+            bastion_vm_id = bastion_vm.get("extId")
+            r_vm_single = client.get(f"{base_url}/vmm/v4.2/ahv/config/vms/{bastion_vm_id}", headers=get_headers())
+            vm_etag = r_vm_single.headers.get("ETag") or r_vm_single.json().get("data", {}).get("$reserved", {}).get("ETag")
+            nic_attach_headers = get_headers()
+            if vm_etag:
+                nic_attach_headers["If-Match"] = vm_etag
+
+            attach_nic_payload = {
+                "backingInfo": {
+                    "isConnected": True
+                },
+                "networkInfo": {
+                    "nicType": "NORMAL_NIC",
+                    "subnet": {
+                        "extId": transit_nonerp_ext_id
+                    },
+                    "vlanMode": "ACCESS",
+                    "ipv4Config": {
+                        "ipAddress": {
+                            "value": Config.BASTION_VM_IP,
+                            "prefixLength": 32
+                        }
+                    }
+                }
+            }
+            res_attach = client.post(f"{base_url}/vmm/v4.2/ahv/config/vms/{bastion_vm_id}/nics", json=attach_nic_payload, headers=nic_attach_headers)
+            if res_attach.status_code in (200, 201, 202):
+                t_nic_id = res_attach.json().get("data", {}).get("extId")
+                if t_nic_id:
+                    wait_for_task(client, t_nic_id, f"Attach Bastion VM '{Config.BASTION_VM_NAME}' to Transit-NonERP-01")
+                print(f"  [OK] Successfully attached Bastion VM '{Config.BASTION_VM_NAME}' to Transit-NonERP-01.")
+            else:
+                print(f"  [Warning] Failed to attach NIC to Bastion VM: {res_attach.status_code} - {res_attach.text}")
+
         # Step 2.4: Configure Default Static Route (0.0.0.0/0) on Transit VPC
         print("\n[2.4] Configuring Default Static Route (0.0.0.0/0) on Transit VPC Route Table...")
         # Get Transit VPC Route Table
@@ -545,6 +620,21 @@ def run_full_workflow():
                     nh_name = nh.get("nexthopName") or nh.get("nexthopReference")
                     r_type = r.get("routeType", "N/A")
                     print(f"  -> Dest: {dest_cidr:<18} | Type: {r_type:<8} | NextHop: {nh_type} ({nh_name})")
+
+        print("\n--- BASTION VM STATUS ---")
+        bastion_vm_final = next((vm for vm in client.get(f"{base_url}/vmm/v4.2/ahv/config/vms", headers=get_headers()).json().get("data", []) if vm.get("name") == Config.BASTION_VM_NAME), None)
+        if bastion_vm_final:
+            b_id = bastion_vm_final.get("extId")
+            b_nics = client.get(f"{base_url}/vmm/v4.2/ahv/config/vms/{b_id}/nics", headers=get_headers()).json().get("data", [])
+            for n in b_nics:
+                net_info = n.get("networkInfo", {}) or n.get("nicNetworkInfo", {})
+                sub_id = net_info.get("subnet", {}).get("extId", "N/A")
+                sub_name = next((s.get("name") for s in final_subnets if s.get("extId") == sub_id), "Unknown")
+                ip_addr = net_info.get("ipv4Config", {}).get("ipAddress", {}).get("value", "N/A")
+                mac = n.get("backingInfo", {}).get("macAddress", "N/A")
+                print(f"VM: {bastion_vm_final.get('name')} | Subnet: {sub_name} ({sub_id}) | IP: {ip_addr} | MAC: {mac}")
+        else:
+            print(f"Bastion VM '{Config.BASTION_VM_NAME}' not found.")
 
         print("\n" + "=" * 80)
         print("  END-TO-END TEARDOWN & RE-CREATION COMPLETED SUCCESSFULLY!")

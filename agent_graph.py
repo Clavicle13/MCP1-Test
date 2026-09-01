@@ -43,6 +43,7 @@ async def planner_node(state: NutanixAgentState) -> dict[str, Any]:
         "  2. Default Static Route (0.0.0.0/0): After creating a VPC, plan steps to retrieve the VPC's Route Table (`listRouteTables` with filter `vpcReference eq '<vpc_ext_id>'`) and add a default static route (`createRouteForRouteTable`):\n"
         "     - For Transit VPC: Next hop must target the external network attachment.\n"
         "     - For Spoke VPC: Next hop must target the Transit VPC ERP subnet.\n"
+        "  3. Bastion Host Attachment: After creating the Transit-NonERP-01 subnet in Transit VPC, attach the Linux Bastion VM (e.g. `LinuxTools`) to `Transit-NonERP-01` with static IP `20.20.20.14` using `vmm_execute` `ahv_createNic`.\n"
         "Respond with a JSON object format:\n"
         '{\n  "plan": ["1. Step one description"]\n}'
     )
@@ -72,8 +73,10 @@ async def planner_node(state: NutanixAgentState) -> dict[str, Any]:
         elif "vpc" in query_lower and "create" in query_lower:
             plan = [
                 "1. Create VPC with DNS server entry configured in commonDhcpOptions and external/ERP attachments",
-                "2. Retrieve Route Table for the newly created VPC",
-                "3. Create default static route (0.0.0.0/0) with appropriate next hop (external network attachment for Transit VPC, Transit VPC ERP subnet for Spoke VPC)"
+                "2. Create Transit Subnets (Transit-ERP-01 and Transit-NonERP-01)",
+                "3. Attach Linux Bastion VM to Transit-NonERP-01 subnet with static IP 20.20.20.14 using vmm_execute ahv_createNic",
+                "4. Retrieve Route Table for the newly created VPC",
+                "5. Create default static route (0.0.0.0/0) with appropriate next hop (external network attachment for Transit VPC, Transit VPC ERP subnet for Spoke VPC)"
             ]
         elif "create" in query_lower or "delete" in query_lower or "update" in query_lower:
             plan = [

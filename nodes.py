@@ -53,6 +53,7 @@ async def agent_node(state: NutanixAgentState) -> dict[str, Any]:
         "4. VPC & Routing Directives:\n"
         "   - Always configure DNS server entry in `commonDhcpOptions.domainNameServers` during VPC creation.\n"
         "   - Always configure default static route (0.0.0.0/0) via `createRouteForRouteTable` targeting external network attachment (for Transit VPC) or Transit ERP subnet (for Spoke VPC).\n"
+        "   - Always attach the Linux Bastion VM (`LinuxTools`) to the `Transit-NonERP-01` subnet with static IP `20.20.20.14` via `vmm_execute` `ahv_createNic`.\n"
         "5. If a tool call fails, analyze the error output carefully and fix missing or invalid parameters."
     )
 

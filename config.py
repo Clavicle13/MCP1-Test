@@ -24,6 +24,8 @@ class Config:
     PC_PASSWORD: str = os.getenv("PC_PASSWORD", "").strip()
     PC_INSECURE: str = os.getenv("PC_INSECURE", "true").strip().lower()
     READ_ONLY_MODE: str = os.getenv("READ_ONLY_MODE", "false").strip().lower()
+    BASTION_VM_NAME: str = os.getenv("BASTION_VM_NAME", "LinuxTools").strip()
+    BASTION_VM_IP: str = os.getenv("BASTION_VM_IP", "20.20.20.14").strip()
 
     # LLM & Tracing Settings
     MODEL_PROVIDER: str = os.getenv("MODEL_PROVIDER", "google").strip().lower()
