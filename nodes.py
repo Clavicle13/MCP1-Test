@@ -50,7 +50,10 @@ async def agent_node(state: NutanixAgentState) -> dict[str, Any]:
         "1. Always reuse entity UUIDs stored in CLUSTER CONTEXT when referencing VMs, clusters, or tasks.\n"
         "2. For read-only queries (listing VMs, checking specs, listing clusters), use GET operations directly.\n"
         "3. When creating, modifying, or deleting resources, format tool parameters accurately.\n"
-        "4. If a tool call fails, analyze the error output carefully and fix missing or invalid parameters."
+        "4. VPC & Routing Directives:\n"
+        "   - Always configure DNS server entry in `commonDhcpOptions.domainNameServers` during VPC creation.\n"
+        "   - Always configure default static route (0.0.0.0/0) via `createRouteForRouteTable` targeting external network attachment (for Transit VPC) or Transit ERP subnet (for Spoke VPC).\n"
+        "5. If a tool call fails, analyze the error output carefully and fix missing or invalid parameters."
     )
 
     # Ensure system prompt is present at head of message list

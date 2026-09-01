@@ -38,6 +38,11 @@ async def planner_node(state: NutanixAgentState) -> dict[str, Any]:
         "produce a SINGLE-STEP plan that directly invokes the MCP tool (e.g. 'Use vmm_execute ahv_listVms to list all AHV Virtual Machines').\n"
         "- Do NOT add display, extraction, or summary steps — the calling code handles presentation.\n"
         "- Only use multiple steps for complex workflows requiring chained API calls (e.g. create VM then power on).\n"
+        "- VPC CREATION & ROUTING DIRECTIVES:\n"
+        "  1. DNS Configuration: During VPC creation (`networking_execute` `createVpc`), ALWAYS include the captured DNS server IP in `commonDhcpOptions.domainNameServers` for both Transit and Spoke VPCs.\n"
+        "  2. Default Static Route (0.0.0.0/0): After creating a VPC, plan steps to retrieve the VPC's Route Table (`listRouteTables` with filter `vpcReference eq '<vpc_ext_id>'`) and add a default static route (`createRouteForRouteTable`):\n"
+        "     - For Transit VPC: Next hop must target the external network attachment.\n"
+        "     - For Spoke VPC: Next hop must target the Transit VPC ERP subnet.\n"
         "Respond with a JSON object format:\n"
         '{\n  "plan": ["1. Step one description"]\n}'
     )
@@ -64,6 +69,12 @@ async def planner_node(state: NutanixAgentState) -> dict[str, Any]:
             plan = ["1. Use storage_execute listStorageContainers to list all Nutanix Storage Containers"]
         elif "subnet" in query_lower or "network" in query_lower:
             plan = ["1. Use networking_execute listSubnets to list all Nutanix Network Subnets"]
+        elif "vpc" in query_lower and "create" in query_lower:
+            plan = [
+                "1. Create VPC with DNS server entry configured in commonDhcpOptions and external/ERP attachments",
+                "2. Retrieve Route Table for the newly created VPC",
+                "3. Create default static route (0.0.0.0/0) with appropriate next hop (external network attachment for Transit VPC, Transit VPC ERP subnet for Spoke VPC)"
+            ]
         elif "create" in query_lower or "delete" in query_lower or "update" in query_lower:
             plan = [
                 "1. Inspect operation schema for requested mutation",
@@ -105,8 +116,13 @@ async def executor_node(state: NutanixAgentState) -> dict[str, Any]:
         "   - For Virtual Machines: ALWAYS use tool 'vmm_execute' with operation 'ahv_listVms' (do NOT use 'esxi_listVms' or 'listVms').\n"
         "   - For Storage Containers: Use tool 'storage_execute' or 'clustermgmt_execute' with operation 'listStorageContainers'.\n"
         "   - For Network Subnets: Use tool 'networking_execute' with operation 'listSubnets'.\n"
-        "2. Do NOT call schema discovery tools ('getOperationSchema', 'listOperations') when asked to list or inspect actual entities.\n"
-        "3. Always select and invoke the exact tool call required to fetch live Prism Central entity data."
+        "2. VPC & ROUTING EXECUTION DIRECTIVES:\n"
+        "   - When creating VPCs (Transit or Spoke), ALWAYS populate `commonDhcpOptions.domainNameServers` with the captured DNS server IP.\n"
+        "   - When configuring default routes (0.0.0.0/0), use `createRouteForRouteTable` on the VPC's route table:\n"
+        "     * Transit VPC: Set next hop to the external network attachment.\n"
+        "     * Spoke VPC: Set next hop to the Transit VPC ERP subnet.\n"
+        "3. Do NOT call schema discovery tools ('getOperationSchema', 'listOperations') when asked to list or inspect actual entities.\n"
+        "4. Always select and invoke the exact tool call required to fetch live Prism Central entity data."
     )
 
     # Gemini requires message lists to end with user role (HumanMessage)
