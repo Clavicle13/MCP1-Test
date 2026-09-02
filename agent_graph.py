@@ -44,6 +44,7 @@ async def planner_node(state: NutanixAgentState) -> dict[str, Any]:
         "     - For Transit VPC: Next hop must target the external network attachment.\n"
         "     - For Spoke VPC: Next hop must target the Transit VPC ERP subnet.\n"
         "  3. Bastion Host Attachment: After creating the Transit-NonERP-01 subnet in Transit VPC, attach the Linux Bastion VM (e.g. `LinuxTools`) to `Transit-NonERP-01` with static IP `20.20.20.14` using `vmm_execute` `ahv_createNic`.\n"
+        "  4. Windows VM Creation: After Linux VM attachment/creation, create a Windows VM (e.g. `Windows2022-VM`) with Image `Windows 2022`, Storage Container `nkp`, 8 vCPUs, 10 GB RAM, 110 GB Boot Disk, Subnet `Transit-NonERP-01`, static IP `20.20.20.17`, Gateway `20.20.20.1`, and Project `default` using `vmm_execute` `ahv_createVm`.\n"
         "Respond with a JSON object format:\n"
         '{\n  "plan": ["1. Step one description"]\n}'
     )
@@ -75,8 +76,9 @@ async def planner_node(state: NutanixAgentState) -> dict[str, Any]:
                 "1. Create VPC with DNS server entry configured in commonDhcpOptions and external/ERP attachments",
                 "2. Create Transit Subnets (Transit-ERP-01 and Transit-NonERP-01)",
                 "3. Attach Linux Bastion VM to Transit-NonERP-01 subnet with static IP 20.20.20.14 using vmm_execute ahv_createNic",
-                "4. Retrieve Route Table for the newly created VPC",
-                "5. Create default static route (0.0.0.0/0) with appropriate next hop (external network attachment for Transit VPC, Transit VPC ERP subnet for Spoke VPC)"
+                "4. Create Windows VM (Image: Windows 2022, Storage Container: nkp, 8 vCPUs, 10 GB RAM, 110 GB Boot Disk, Subnet: Transit-NonERP-01, IP: 20.20.20.17, Gateway: 20.20.20.1, Project: default) using vmm_execute ahv_createVm",
+                "5. Retrieve Route Table for the newly created VPC",
+                "6. Create default static route (0.0.0.0/0) with appropriate next hop (external network attachment for Transit VPC, Transit VPC ERP subnet for Spoke VPC)"
             ]
         elif "create" in query_lower or "delete" in query_lower or "update" in query_lower:
             plan = [
@@ -119,11 +121,13 @@ async def executor_node(state: NutanixAgentState) -> dict[str, Any]:
         "   - For Virtual Machines: ALWAYS use tool 'vmm_execute' with operation 'ahv_listVms' (do NOT use 'esxi_listVms' or 'listVms').\n"
         "   - For Storage Containers: Use tool 'storage_execute' or 'clustermgmt_execute' with operation 'listStorageContainers'.\n"
         "   - For Network Subnets: Use tool 'networking_execute' with operation 'listSubnets'.\n"
-        "2. VPC & ROUTING EXECUTION DIRECTIVES:\n"
+        "2. VPC, ROUTING & VM PROVISIONING EXECUTION DIRECTIVES:\n"
         "   - When creating VPCs (Transit or Spoke), ALWAYS populate `commonDhcpOptions.domainNameServers` with the captured DNS server IP.\n"
         "   - When configuring default routes (0.0.0.0/0), use `createRouteForRouteTable` on the VPC's route table:\n"
         "     * Transit VPC: Set next hop to the external network attachment.\n"
         "     * Spoke VPC: Set next hop to the Transit VPC ERP subnet.\n"
+        "   - When creating/attaching Linux Bastion VM (`LinuxTools`), attach to `Transit-NonERP-01` with static IP `20.20.20.14`.\n"
+        "   - When creating Windows VM (`Windows2022-VM`), use `vmm_execute` `ahv_createVm` with Image `Windows 2022`, Storage Container `nkp`, 8 vCPUs, 10 GB RAM, 110 GB Boot Disk, Subnet `Transit-NonERP-01`, static IP `20.20.20.17`, Gateway `20.20.20.1`, and Project `default`.\n"
         "3. Do NOT call schema discovery tools ('getOperationSchema', 'listOperations') when asked to list or inspect actual entities.\n"
         "4. Always select and invoke the exact tool call required to fetch live Prism Central entity data."
     )
@@ -148,7 +152,26 @@ async def executor_node(state: NutanixAgentState) -> dict[str, Any]:
     if not response:
         # Fallback simulation response if offline / invalid or leaked LLM API key
         step_lower = active_step_desc.lower()
-        if "storage" in step_lower:
+        if "windows" in step_lower or ("create" in step_lower and "vm" in step_lower):
+            response = AIMessage(
+                content=f"Executing step {current_step + 1}: {active_step_desc} (Rule-based Fallback)",
+                tool_calls=[{
+                    "name": "vmm_execute",
+                    "args": {
+                        "operation": "ahv_createVm",
+                        "request_body": {
+                            "name": Config.WINDOWS_VM_NAME,
+                            "numSockets": 1,
+                            "numCoresPerSocket": Config.WINDOWS_VM_VCPU,
+                            "memorySizeBytes": Config.WINDOWS_VM_MEMORY_GB * 1024 * 1024 * 1024,
+                            "description": "Windows Server 2022 VM created by LangGraph Agent",
+                        }
+                    },
+                    "id": f"call_exec_{current_step}",
+                    "type": "tool_call"
+                }]
+            )
+        elif "storage" in step_lower:
             response = AIMessage(
                 content=f"Executing step {current_step + 1}: {active_step_desc} (Rule-based Fallback)",
                 tool_calls=[{"name": "storage_execute", "args": {"operation": "listStorageContainers"}, "id": f"call_exec_{current_step}", "type": "tool_call"}]

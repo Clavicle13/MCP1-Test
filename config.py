@@ -26,6 +26,15 @@ class Config:
     READ_ONLY_MODE: str = os.getenv("READ_ONLY_MODE", "false").strip().lower()
     BASTION_VM_NAME: str = os.getenv("BASTION_VM_NAME", "LinuxTools").strip()
     BASTION_VM_IP: str = os.getenv("BASTION_VM_IP", "20.20.20.14").strip()
+    WINDOWS_VM_NAME: str = os.getenv("WINDOWS_VM_NAME", "Windows2022-VM").strip()
+    WINDOWS_VM_IMAGE: str = os.getenv("WINDOWS_VM_IMAGE", "Windows 2022").strip()
+    WINDOWS_VM_CONTAINER: str = os.getenv("WINDOWS_VM_CONTAINER", "nkp").strip()
+    WINDOWS_VM_VCPU: int = int(os.getenv("WINDOWS_VM_VCPU", "8"))
+    WINDOWS_VM_MEMORY_GB: int = int(os.getenv("WINDOWS_VM_MEMORY_GB", "10"))
+    WINDOWS_VM_DISK_GB: int = int(os.getenv("WINDOWS_VM_DISK_GB", "110"))
+    WINDOWS_VM_IP: str = os.getenv("WINDOWS_VM_IP", "20.20.20.17").strip()
+    WINDOWS_VM_GATEWAY: str = os.getenv("WINDOWS_VM_GATEWAY", "20.20.20.1").strip()
+    WINDOWS_VM_PROJECT: str = os.getenv("WINDOWS_VM_PROJECT", "default").strip()
 
     # LLM & Tracing Settings
     MODEL_PROVIDER: str = os.getenv("MODEL_PROVIDER", "google").strip().lower()

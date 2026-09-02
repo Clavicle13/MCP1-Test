@@ -87,6 +87,26 @@ def run_full_workflow():
                 if task_id:
                     wait_for_task(client, task_id, "Delete Floating IP")
 
+        # 1.0.0 Delete existing Windows VM if present
+        try:
+            r_all_vms_pre = client.get(f"{base_url}/vmm/v4.2/ahv/config/vms", headers=get_headers()).json().get("data", [])
+            win_vm_old = next((v for v in r_all_vms_pre if v.get("name") == Config.WINDOWS_VM_NAME), None)
+            if win_vm_old:
+                win_id = win_vm_old.get("extId")
+                print(f"Deleting existing Windows VM '{Config.WINDOWS_VM_NAME}' ({win_id})...")
+                r_win_single = client.get(f"{base_url}/vmm/v4.2/ahv/config/vms/{win_id}", headers=get_headers())
+                win_del_etag = r_win_single.headers.get("ETag") or r_win_single.json().get("data", {}).get("$reserved", {}).get("ETag")
+                del_win_headers = get_headers()
+                if win_del_etag:
+                    del_win_headers["If-Match"] = win_del_etag
+                res_del_win = client.delete(f"{base_url}/vmm/v4.2/ahv/config/vms/{win_id}", headers=del_win_headers)
+                if res_del_win.status_code in (200, 202):
+                    t_win_del = res_del_win.json().get("data", {}).get("extId")
+                    if t_win_del:
+                        wait_for_task(client, t_win_del, f"Delete Windows VM '{Config.WINDOWS_VM_NAME}'")
+        except Exception as exc:
+            print(f"  [Warning] Windows VM teardown check: {exc}")
+
         # 1.1 Discover live VPCs and Subnets
         r_vpcs = client.get(f"{base_url}/networking/v4.3/config/vpcs", headers=get_headers()).json().get("data", [])
         r_subnets = client.get(f"{base_url}/networking/v4.3/config/subnets", headers=get_headers()).json().get("data", [])
@@ -433,6 +453,109 @@ def run_full_workflow():
             else:
                 print(f"  [Warning] Failed to attach NIC to Bastion VM: {res_attach.status_code} - {res_attach.text}")
 
+        # Step 2.3.2: Create Windows VM on Transit-NonERP-01 Subnet
+        print(f"\n[2.3.2] Creating Windows VM ('{Config.WINDOWS_VM_NAME}') on Transit-NonERP-01...")
+        try:
+            # Query Image for Windows 2022
+            r_imgs = client.get(f"{base_url}/vmm/v4.2/content/images", headers=get_headers()).json().get("data", [])
+            win_img = next((img for img in r_imgs if "windows" in img.get("name", "").lower() and "2022" in img.get("name", "").lower()), None)
+            win_img_id = win_img.get("extId") if win_img else None
+            print(f" -> Found Windows Image: {win_img.get('name') if win_img else 'Not Found'} ({win_img_id})")
+
+            win_vm_payload = {
+                "name": Config.WINDOWS_VM_NAME,
+                "description": "Windows Server 2022 VM created by Nutanix LangGraph Agent",
+                "cluster": {"extId": CLUSTER_EXT_ID},
+                "numSockets": 1,
+                "numCoresPerSocket": Config.WINDOWS_VM_VCPU,
+                "memorySizeBytes": Config.WINDOWS_VM_MEMORY_GB * 1024 * 1024 * 1024,
+            }
+
+            create_vm_headers = {
+                "NTNX-Request-Id": str(uuid.uuid4()),
+                "Accept": "application/json",
+                "Content-Type": "application/json"
+            }
+            res_win_vm = client.post(f"{base_url}/vmm/v4.2/ahv/config/vms", json=win_vm_payload, headers=create_vm_headers)
+            if res_win_vm.status_code in (200, 201, 202):
+                t_win_id = res_win_vm.json().get("data", {}).get("extId")
+                if t_win_id:
+                    wait_for_task(client, t_win_id, f"Create Windows VM '{Config.WINDOWS_VM_NAME}'")
+                print(f"  [OK] Successfully created base VM '{Config.WINDOWS_VM_NAME}'.")
+
+                # Retrieve newly created VM ExtID
+                r_vms_after = client.get(f"{base_url}/vmm/v4.2/ahv/config/vms", headers=get_headers()).json().get("data", [])
+                created_win_vm = next((v for v in r_vms_after if v.get("name") == Config.WINDOWS_VM_NAME), None)
+                if created_win_vm:
+                    win_vm_id = created_win_vm.get("extId")
+
+                    # 1. Attach 110 GB Boot Disk cloned from Windows Image
+                    if win_img_id:
+                        r_single_win = client.get(f"{base_url}/vmm/v4.2/ahv/config/vms/{win_vm_id}", headers=get_headers())
+                        win_etag = r_single_win.headers.get("ETag") or r_single_win.json().get("data", {}).get("$reserved", {}).get("ETag")
+                        disk_headers = get_headers()
+                        if win_etag:
+                            disk_headers["If-Match"] = win_etag
+
+                        obj_type = "$objectType"
+                        disk_payload = {
+                            "diskAddress": {"busType": "SCSI", "index": 0},
+                            "backingInfo": {
+                                obj_type: "vmm.v4.ahv.config.VmDisk",
+                                "diskSizeBytes": Config.WINDOWS_VM_DISK_GB * 1024 * 1024 * 1024,
+                                "dataSource": {
+                                    obj_type: "vmm.v4.ahv.config.DataSource",
+                                    "reference": {
+                                        obj_type: "vmm.v4.ahv.config.ImageReference",
+                                        "imageExtId": win_img_id
+                                    }
+                                }
+                            }
+                        }
+                        res_disk = client.post(f"{base_url}/vmm/v4.2/ahv/config/vms/{win_vm_id}/disks", json=disk_payload, headers=disk_headers)
+                        if res_disk.status_code in (200, 201, 202):
+                            t_disk_id = res_disk.json().get("data", {}).get("extId")
+                            if t_disk_id:
+                                wait_for_task(client, t_disk_id, f"Attach {Config.WINDOWS_VM_DISK_GB}GB Boot Disk to '{Config.WINDOWS_VM_NAME}'")
+                            print(f"  [OK] Successfully attached {Config.WINDOWS_VM_DISK_GB}GB boot disk cloned from image.")
+                        else:
+                            print(f"  [Warning] Disk attachment failed: {res_disk.status_code} - {res_disk.text}")
+
+                    # 2. Attach NIC to Transit-NonERP-01 subnet with static IP
+                    if transit_nonerp_ext_id:
+                        r_single_win = client.get(f"{base_url}/vmm/v4.2/ahv/config/vms/{win_vm_id}", headers=get_headers())
+                        win_etag = r_single_win.headers.get("ETag") or r_single_win.json().get("data", {}).get("$reserved", {}).get("ETag")
+                        nic_headers = get_headers()
+                        if win_etag:
+                            nic_headers["If-Match"] = win_etag
+
+                        nic_win_payload = {
+                            "backingInfo": {"isConnected": True},
+                            "networkInfo": {
+                                "nicType": "NORMAL_NIC",
+                                "subnet": {"extId": transit_nonerp_ext_id},
+                                "vlanMode": "ACCESS",
+                                "ipv4Config": {
+                                    "ipAddress": {
+                                        "value": Config.WINDOWS_VM_IP,
+                                        "prefixLength": 32
+                                    }
+                                }
+                            }
+                        }
+                        res_win_nic = client.post(f"{base_url}/vmm/v4.2/ahv/config/vms/{win_vm_id}/nics", json=nic_win_payload, headers=nic_headers)
+                        if res_win_nic.status_code in (200, 201, 202):
+                            t_win_nic_id = res_win_nic.json().get("data", {}).get("extId")
+                            if t_win_nic_id:
+                                wait_for_task(client, t_win_nic_id, f"Attach NIC ({Config.WINDOWS_VM_IP}) to '{Config.WINDOWS_VM_NAME}'")
+                            print(f"  [OK] Successfully attached NIC ({Config.WINDOWS_VM_IP}) on Transit-NonERP-01.")
+                        else:
+                            print(f"  [Warning] NIC attachment failed: {res_win_nic.status_code} - {res_win_nic.text}")
+            else:
+                print(f"  [Warning] Failed to create Windows VM: {res_win_vm.status_code} - {res_win_vm.text}")
+        except Exception as exc:
+            print(f"  [Warning] Windows VM creation error: {exc}")
+
         # Step 2.4: Configure Default Static Route (0.0.0.0/0) on Transit VPC
         print("\n[2.4] Configuring Default Static Route (0.0.0.0/0) on Transit VPC Route Table...")
         # Get Transit VPC Route Table
@@ -635,6 +758,21 @@ def run_full_workflow():
                 print(f"VM: {bastion_vm_final.get('name')} | Subnet: {sub_name} ({sub_id}) | IP: {ip_addr} | MAC: {mac}")
         else:
             print(f"Bastion VM '{Config.BASTION_VM_NAME}' not found.")
+
+        print("\n--- WINDOWS VM STATUS ---")
+        win_vm_final = next((vm for vm in client.get(f"{base_url}/vmm/v4.2/ahv/config/vms", headers=get_headers()).json().get("data", []) if vm.get("name") == Config.WINDOWS_VM_NAME), None)
+        if win_vm_final:
+            w_id = win_vm_final.get("extId")
+            w_nics = client.get(f"{base_url}/vmm/v4.2/ahv/config/vms/{w_id}/nics", headers=get_headers()).json().get("data", [])
+            for n in w_nics:
+                net_info = n.get("networkInfo", {}) or n.get("nicNetworkInfo", {})
+                sub_id = net_info.get("subnet", {}).get("extId", "N/A")
+                sub_name = next((s.get("name") for s in final_subnets if s.get("extId") == sub_id), "Unknown")
+                ip_addr = net_info.get("ipv4Config", {}).get("ipAddress", {}).get("value", "N/A")
+                mac = n.get("backingInfo", {}).get("macAddress", "N/A")
+                print(f"VM: {win_vm_final.get('name')} | Subnet: {sub_name} ({sub_id}) | IP: {ip_addr} | MAC: {mac}")
+        else:
+            print(f"Windows VM '{Config.WINDOWS_VM_NAME}' not found.")
 
         print("\n" + "=" * 80)
         print("  END-TO-END TEARDOWN & RE-CREATION COMPLETED SUCCESSFULLY!")
