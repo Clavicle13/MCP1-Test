@@ -74,4 +74,19 @@ with httpx.Client(verify=False, timeout=20.0, auth=auth) as client:
                     r_type = r.get("routeType", "N/A")
                     print(f"{vpc_name:<20} | {dest_cidr:<15} | {r_type:<12} | {nh_type:<18} | {nh_name}")
 
+    print("\n--- 4. FLOATING IPS & VM ASSOCIATIONS ---")
+    print(f"{'FIP Name':<25} | {'Floating IP':<18} | {'Private IP':<18} | {'VM NIC Reference'}")
+    print("-" * 100)
+    time.sleep(1)
+    fips = client.get(f"{base_url}/networking/v4.3/config/floating-ips", headers={"NTNX-Request-Id": str(uuid.uuid4())}).json().get("data", [])
+    if fips:
+        for f in fips:
+            fip_name = f.get("name", "N/A")
+            fip_val = f.get("floatingIp", {}).get("ipv4", {}).get("value", "N/A")
+            priv_ip = f.get("association", {}).get("privateIp", {}).get("ipv4", {}).get("value", "N/A") if f.get("association") else "N/A"
+            nic_ref = f.get("association", {}).get("vmNicReference", "N/A") if f.get("association") else "N/A"
+            print(f"{fip_name:<25} | {fip_val:<18} | {priv_ip:<18} | {nic_ref}")
+    else:
+        print("No Floating IPs currently allocated.")
+
     print("=" * 100)

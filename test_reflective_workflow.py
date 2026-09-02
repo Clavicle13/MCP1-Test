@@ -2,7 +2,8 @@ import asyncio
 import logging
 from config import Config
 from state import NutanixAgentState, merge_cluster_context
-from agent_graph import build_reflective_nutanix_graph, planner_node, reviewer_node
+from agent_graph import build_reflective_nutanix_graph, planner_node, reviewer_node, route_to_domain_subgraph
+from subgraphs import build_network_subgraph, build_compute_subgraph, build_storage_subgraph
 from tui_app import build_tui_layout
 
 logging.basicConfig(level=logging.INFO)
@@ -27,11 +28,45 @@ def test_reflective_state_schema():
     print(" -> Reflective state schema verification passed!")
 
 
+def test_subgraphs_compilation():
+    print("\nTesting Individual Subgraphs Compilation...")
+    net_sg = build_network_subgraph()
+    assert net_sg is not None
+    print(" -> Network Subgraph compiled successfully!")
+
+    comp_sg = build_compute_subgraph()
+    assert comp_sg is not None
+    print(" -> Compute Subgraph compiled successfully!")
+
+    stor_sg = build_storage_subgraph()
+    assert stor_sg is not None
+    print(" -> Storage Subgraph compiled successfully!")
+
+
 def test_graph_compilation():
-    print("\nTesting Reflective Agent Graph Compilation...")
+    print("\nTesting Parent Reflective Agent Graph Compilation...")
     graph = build_reflective_nutanix_graph()
     assert graph is not None
-    print(" -> Reflective State Graph (Planner-Executor-Reviewer) compiled cleanly!")
+    print(" -> Parent State Graph (Planner -> Subgraphs -> Reviewer) compiled cleanly!")
+
+
+def test_subgraph_routing():
+    print("\nTesting Domain Subgraph Routing Logic...")
+    net_state: NutanixAgentState = {"messages": [], "plan": ["1. Create VPC and Subnets"], "current_step": 0, "critique": "", "cluster_context": {}, "pending_tool_call": None, "approval_granted": None, "error_trace": None, "retry_count": 0}
+    assert route_to_domain_subgraph(net_state) == "network_subgraph"
+    print(" -> Routed 'Create VPC' -> network_subgraph")
+
+    comp_state: NutanixAgentState = {"messages": [], "plan": ["1. Create Windows VM"], "current_step": 0, "critique": "", "cluster_context": {}, "pending_tool_call": None, "approval_granted": None, "error_trace": None, "retry_count": 0}
+    assert route_to_domain_subgraph(comp_state) == "compute_subgraph"
+    print(" -> Routed 'Create Windows VM' -> compute_subgraph")
+
+    stor_state: NutanixAgentState = {"messages": [], "plan": ["1. List Storage Containers"], "current_step": 0, "critique": "", "cluster_context": {}, "pending_tool_call": None, "approval_granted": None, "error_trace": None, "retry_count": 0}
+    assert route_to_domain_subgraph(stor_state) == "storage_subgraph"
+    print(" -> Routed 'List Storage Containers' -> storage_subgraph")
+
+    fip_state: NutanixAgentState = {"messages": [], "plan": ["1. Assign Floating IPs from External Subnet to Linux Bastion VM and Windows VM"], "current_step": 0, "critique": "", "cluster_context": {}, "pending_tool_call": None, "approval_granted": None, "error_trace": None, "retry_count": 0}
+    assert route_to_domain_subgraph(fip_state) == "network_subgraph"
+    print(" -> Routed 'Assign Floating IPs' -> network_subgraph")
 
 
 async def test_planner_and_reviewer_nodes():
@@ -76,11 +111,13 @@ def test_tui_layout_generation():
 
 async def main():
     test_reflective_state_schema()
+    test_subgraphs_compilation()
     test_graph_compilation()
+    test_subgraph_routing()
     await test_planner_and_reviewer_nodes()
     test_tui_layout_generation()
     print("\n" + "=" * 60)
-    print(" ALL REFLECTIVE WORKFLOW & TUI TESTS PASSED SUCCESSFULLY!")
+    print(" ALL REFLECTIVE WORKFLOW, SUBGRAPH & TUI TESTS PASSED!")
     print("=" * 60)
 
 

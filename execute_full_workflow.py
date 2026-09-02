@@ -10,9 +10,6 @@ from config import Config
 auth = (Config.PC_USERNAME, Config.PC_PASSWORD)
 base_url = f"https://{Config.PC_HOST}:{Config.PC_PORT}/api"
 
-CLUSTER_EXT_ID = "00065a51-3cfb-9563-0000-0000000297f5"
-VSWITCH_EXT_ID = "2666a84d-6c65-4bb1-9db9-37ba311e1d2e"
-
 def get_headers():
     return {
         "NTNX-Request-Id": str(uuid.uuid4()),
@@ -45,6 +42,14 @@ def run_full_workflow():
     print("=" * 80)
 
     with httpx.Client(verify=False, timeout=30.0, auth=auth) as client:
+        # Dynamic Cluster and Virtual Switch discovery
+        r_cls = client.get(f"{base_url}/clustermgmt/v4.0.b2/config/clusters", headers=get_headers()).json().get("data", [])
+        cluster_ext_id = r_cls[0].get("extId") if r_cls else "00065a75-6072-0ba0-0000-0000000297f5"
+        print(f" -> Discovered Cluster ExtID: {cluster_ext_id}")
+
+        r_vsw = client.get(f"{base_url}/networking/v4.3/config/virtual-switches", headers=get_headers()).json().get("data", [])
+        vswitch_ext_id = r_vsw[0].get("extId") if r_vsw else "82ae0b0c-c6e8-47c5-a64c-7d7301babfab"
+        print(f" -> Discovered Virtual Switch ExtID: {vswitch_ext_id}")
         # =====================================================================
         # CAPTURE PHASE: Capture DNS Server and Subnet details from Primary Subnet
         # =====================================================================
@@ -245,8 +250,8 @@ def run_full_workflow():
             "subnetType": "VLAN",
             "isExternal": True,
             "networkId": 0,
-            "clusterReference": CLUSTER_EXT_ID,
-            "virtualSwitchReference": VSWITCH_EXT_ID,
+            "clusterReference": cluster_ext_id,
+            "virtualSwitchReference": vswitch_ext_id,
             "ipConfig": [
                 {
                     "ipv4": {
@@ -420,6 +425,23 @@ def run_full_workflow():
             print("  [Warning] Transit-NonERP-01 subnet ExtID not found.")
         else:
             bastion_vm_id = bastion_vm.get("extId")
+
+            # Detach any existing basic/stale NICs from Bastion VM before attaching to VPC subnet
+            r_bastion_nics = client.get(f"{base_url}/vmm/v4.2/ahv/config/vms/{bastion_vm_id}/nics", headers=get_headers()).json().get("data", [])
+            for old_nic in r_bastion_nics:
+                old_nic_id = old_nic.get("extId")
+                print(f"  Detaching existing NIC {old_nic_id} from Bastion VM before attaching to VPC subnet...")
+                r_vm_s = client.get(f"{base_url}/vmm/v4.2/ahv/config/vms/{bastion_vm_id}", headers=get_headers())
+                v_etag = r_vm_s.headers.get("ETag") or r_vm_s.json().get("data", {}).get("$reserved", {}).get("ETag")
+                d_headers = get_headers()
+                if v_etag:
+                    d_headers["If-Match"] = v_etag
+                res_d = client.delete(f"{base_url}/vmm/v4.2/ahv/config/vms/{bastion_vm_id}/nics/{old_nic_id}", headers=d_headers)
+                if res_d.status_code in (200, 202):
+                    t_d = res_d.json().get("data", {}).get("extId")
+                    if t_d:
+                        wait_for_task(client, t_d, f"Detach old NIC {old_nic_id}")
+
             r_vm_single = client.get(f"{base_url}/vmm/v4.2/ahv/config/vms/{bastion_vm_id}", headers=get_headers())
             vm_etag = r_vm_single.headers.get("ETag") or r_vm_single.json().get("data", {}).get("$reserved", {}).get("ETag")
             nic_attach_headers = get_headers()
@@ -457,7 +479,7 @@ def run_full_workflow():
         print(f"\n[2.3.2] Creating Windows VM ('{Config.WINDOWS_VM_NAME}') on Transit-NonERP-01...")
         try:
             # Query Image for Windows 2022
-            r_imgs = client.get(f"{base_url}/vmm/v4.2/content/images", headers=get_headers()).json().get("data", [])
+            r_imgs = client.get(f"{base_url}/vmm/v4.0.b1/content/images", headers=get_headers()).json().get("data", []) or client.get(f"{base_url}/vmm/v4.2/content/images", headers=get_headers()).json().get("data", [])
             win_img = next((img for img in r_imgs if "windows" in img.get("name", "").lower() and "2022" in img.get("name", "").lower()), None)
             win_img_id = win_img.get("extId") if win_img else None
             print(f" -> Found Windows Image: {win_img.get('name') if win_img else 'Not Found'} ({win_img_id})")
@@ -465,7 +487,7 @@ def run_full_workflow():
             win_vm_payload = {
                 "name": Config.WINDOWS_VM_NAME,
                 "description": "Windows Server 2022 VM created by Nutanix LangGraph Agent",
-                "cluster": {"extId": CLUSTER_EXT_ID},
+                "cluster": {"extId": cluster_ext_id},
                 "numSockets": 1,
                 "numCoresPerSocket": Config.WINDOWS_VM_VCPU,
                 "memorySizeBytes": Config.WINDOWS_VM_MEMORY_GB * 1024 * 1024 * 1024,
@@ -703,6 +725,57 @@ def run_full_workflow():
                 print(f"  [OK] Default static route (0.0.0.0/0 -> External Subnet) created on {spoke_vpc_name}.")
             else:
                 print(f"  Route creation response for {spoke_vpc_name}: {res.status_code} - {res.text}")
+
+        # Step 2.6: Assign Floating IPs from External Subnet to LinuxTools and Windows2022-VM
+        print("\n[2.6] Assigning Floating IPs to Linux Bastion & Windows VMs from External Subnet...")
+        # 1. Floating IP for LinuxTools VM
+        r_all_vms_now = client.get(f"{base_url}/vmm/v4.2/ahv/config/vms", headers=get_headers()).json().get("data", [])
+        bastion_vm_now = next((v for v in r_all_vms_now if v.get("name") == Config.BASTION_VM_NAME), None)
+        if bastion_vm_now:
+            b_id = bastion_vm_now.get("extId")
+            r_bnics = client.get(f"{base_url}/vmm/v4.2/ahv/config/vms/{b_id}/nics", headers=get_headers()).json().get("data", [])
+            if r_bnics:
+                b_nic_id = r_bnics[0].get("extId")
+                fip_linux_payload = {
+                    "name": "FIP-LinuxTools",
+                    "externalSubnetReference": vlan_subnet_ext_id,
+                    "association": {
+                        "$objectType": "networking.v4.config.VmNicAssociation",
+                        "vmNicReference": b_nic_id
+                    }
+                }
+                res_fip_l = client.post(f"{base_url}/networking/v4.3/config/floating-ips", json=fip_linux_payload, headers=get_headers())
+                if res_fip_l.status_code in (200, 201, 202):
+                    t_fip_l = res_fip_l.json().get("data", {}).get("extId")
+                    if t_fip_l:
+                        wait_for_task(client, t_fip_l, "Allocate Floating IP for LinuxTools")
+                    print("  [OK] Successfully assigned Floating IP to LinuxTools.")
+                else:
+                    print(f"  [Warning] Floating IP for LinuxTools response: {res_fip_l.status_code} - {res_fip_l.text}")
+
+        # 2. Floating IP for Windows2022-VM
+        created_win_vm_now = next((v for v in r_all_vms_now if v.get("name") == Config.WINDOWS_VM_NAME), None)
+        if created_win_vm_now:
+            w_id = created_win_vm_now.get("extId")
+            r_wnics = client.get(f"{base_url}/vmm/v4.2/ahv/config/vms/{w_id}/nics", headers=get_headers()).json().get("data", [])
+            if r_wnics:
+                w_nic_id = r_wnics[0].get("extId")
+                fip_win_payload = {
+                    "name": "FIP-Windows2022-VM",
+                    "externalSubnetReference": vlan_subnet_ext_id,
+                    "association": {
+                        "$objectType": "networking.v4.config.VmNicAssociation",
+                        "vmNicReference": w_nic_id
+                    }
+                }
+                res_fip_w = client.post(f"{base_url}/networking/v4.3/config/floating-ips", json=fip_win_payload, headers=get_headers())
+                if res_fip_w.status_code in (200, 201, 202):
+                    t_fip_w = res_fip_w.json().get("data", {}).get("extId")
+                    if t_fip_w:
+                        wait_for_task(client, t_fip_w, "Allocate Floating IP for Windows VM")
+                    print("  [OK] Successfully assigned Floating IP to Windows2022-VM.")
+                else:
+                    print(f"  [Warning] Floating IP for Windows VM response: {res_fip_w.status_code} - {res_fip_w.text}")
 
         # =====================================================================
         # PHASE 3: VERIFICATION

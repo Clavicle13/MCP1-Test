@@ -234,10 +234,15 @@ async def run_interactive_workflow():
 
 
 async def run_demo_suite(graph, thread_config):
-    """Automated demonstration suite verifying Reflective Planning, Executor, HITL, and Reviewer."""
+    """Automated demonstration suite verifying Reflective Planning, Subgraphs, HITL, and Reviewer."""
     print("\n" + "=" * 80)
     print(" RUNNING AUTOMATED REFLECTIVE NUTANIX AGENT DEMO SUITE")
     print("=" * 80)
+
+    try:
+        await mcp_client_manager.initialize_tools()
+    except Exception as exc:
+        logger.warning(f"Note on MCP init: {exc}")
 
     # Scenario 1: Reflective GET Query (Autonomous execution)
     print("\n--- [Scenario 1: Reflective Read-Only GET Query] ---")
